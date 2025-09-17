@@ -1,8 +1,8 @@
 {
-  description = "NLLB translation playground (PyTorch+Transformers and CTranslate2) with CUDA";
+  description = "NLLB + Transformers + CTranslate2 on CUDA (dev shell)";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     flake-utils.url = "github:numtide/flake-utils";
   };
 
@@ -12,92 +12,62 @@
     flake-utils,
   }:
     flake-utils.lib.eachDefaultSystem (system: let
+      # Enable CUDA on the C++ ctranslate2 package globally
+      overlays = [
+        (final: prev: {
+          ctranslate2 = prev.ctranslate2.override {withCUDA = true;};
+        })
+      ];
+
       pkgs = import nixpkgs {
-        inherit system;
-        # CUDA + unfree are required for NVIDIA libs and pytorch-bin
+        inherit system overlays;
         config = {
           allowUnfree = true;
           cudaSupport = true;
         };
       };
 
-      python = pkgs.python312;
+      py = pkgs.python312;
 
-      # CUDA-enabled CTranslate2 C++ runtime
-      ctranslate2-cuda = pkgs.ctranslate2.override {withCUDA = true;};
-
-      pythonEnv = python.withPackages (
-        ps: let
-          # Prefer upstream wheel-based PyTorch with CUDA if present; otherwise fall back.
-          pytorchWithCuda =
-            if builtins.hasAttr "pytorch-bin" ps
-            then ps.pytorch-bin
-            else (ps.pytorch.override {cudaSupport = true;});
-        in [
-          pytorchWithCuda
-          ps.transformers
-          ps.sentencepiece
-          ps.accelerate
-          ps.huggingface-hub
-          ps.safetensors
-          ps.pip
-          ps.setuptools
-          ps.wheel
-
-          # Python bindings + converter CLI; link to CUDA runtime above
-          (ps.ctranslate2.override {ctranslate2 = ctranslate2-cuda;})
-        ]
-      );
+      pythonEnv = py.withPackages (ps: let
+        torch =
+          if ps ? pytorch-bin
+          then ps.pytorch-bin
+          else (ps.pytorch.override {cudaSupport = true;});
+      in [
+        torch
+        ps.transformers
+        ps.sentencepiece
+        ps.accelerate
+        ps.huggingface-hub
+        ps.safetensors
+        ps.ctranslate2 # Python bindings + ct2-transformers-converter
+      ]);
     in {
       devShells.default = pkgs.mkShell {
         packages = [
           pythonEnv
-          ctranslate2-cuda
+          pkgs.ctranslate2 # C++ libs/CLI built with CUDA (from overlay)
           pkgs.git
         ];
 
-        # Useful in many setups; harmless if already set
         NIXPKGS_ALLOW_UNFREE = "1";
 
         shellHook = ''
-                      echo "✓ Python: $(python --version)"
+                      echo "--- CUDA/NLP sanity check ---"
                       python - <<'PY'
-          import torch, shutil
-          print("✓ torch", torch.__version__, "CUDA available:", torch.cuda.is_available())
+          import torch, ctranslate2 as c2, shutil
+          print("torch:", torch.__version__, "CUDA available:", torch.cuda.is_available())
           if torch.cuda.is_available():
-              print("  GPU:", torch.cuda.get_device_name(0))
-          try:
-              import ctranslate2
-              print("✓ ctranslate2", ctranslate2.__version__,
-                    "converter:", shutil.which("ct2-transformers-converter") is not None)
-          except Exception as e:
-              print("ctranslate2 import failed:", e)
+              print("GPU:", torch.cuda.get_device_name(0))
+          print("ctranslate2:", getattr(c2, "__version__", "unknown"),
+                "GPUs visible:", getattr(c2, "get_cuda_device_count", lambda: "n/a")())
+          print("converter present:", shutil.which("ct2-transformers-converter") is not None)
           PY
-                      cat <<'TXT'
-
-          Examples you can paste:
-
-          # 1) Transformers (spa -> eng)
-          python - <<'PY'
-          from transformers import pipeline
-          pipe = pipeline("translation",
-                          model="facebook/nllb-200-distilled-1.3B",
-                          src_lang="spa_Latn", tgt_lang="eng_Latn")
-          print(pipe("¿Cómo estás?")[0]["translation_text"])
-          PY
-
-          # 2) Convert NLLB to CTranslate2 + run on CUDA
-          ct2-transformers-converter --model facebook/nllb-200-distilled-600M --output_dir nllb-ct2
-          python - <<'PY'
-          import ctranslate2, transformers
-          tok = transformers.AutoTokenizer.from_pretrained("facebook/nllb-200-distilled-600M", src_lang="spa_Latn")
-          tr  = ctranslate2.Translator("nllb-ct2", device="cuda")
-          src = tok.convert_ids_to_tokens(tok.encode("hola mundo"))
-          res = tr.translate_batch([src], target_prefix=[["eng_Latn"]])
-          toks = res[0].hypotheses[0][1:]  # drop leading lang token
-          print(tok.decode(tok.convert_tokens_to_ids(toks)))
-          PY
-          TXT
+                      echo
+                      echo "Example:"
+                      echo "  ct2-transformers-converter --model facebook/nllb-200-distilled-600M --output_dir nllb-ct2"
+                      echo "  python - <<'PY'\nimport ctranslate2, transformers\nTGT='eng_Latn'; SRC='spa_Latn'\ntok=transformers.AutoTokenizer.from_pretrained('facebook/nllb-200-distilled-600M',src_lang=SRC)\ntr=ctranslate2.Translator('nllb-ct2', device='cuda', compute_type='float16')\nsrc=tok.convert_ids_to_tokens(tok.encode('hola mundo'))\nres=tr.translate_batch([src], target_prefix=[[TGT]])\ntoks=res[0].hypotheses[0][1:]\nprint(tok.decode(tok.convert_tokens_to_ids(toks)))\nPY"
         '';
       };
     });
