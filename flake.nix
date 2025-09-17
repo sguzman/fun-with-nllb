@@ -2,7 +2,7 @@
   description = "NLLB translation playground (PyTorch+Transformers and CTranslate2) with CUDA";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-25.05";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
     flake-utils.url = "github:numtide/flake-utils";
   };
 
