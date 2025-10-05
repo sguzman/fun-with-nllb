@@ -3,7 +3,19 @@ import sys
 import traceback
 import torch
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
-from huggingface_hub import snapshot_download, HfHubHTTPError
+from huggingface_hub import snapshot_download
+
+# Be compatible with multiple huggingface_hub versions
+try:
+    from huggingface_hub.errors import HfHubHTTPError  # modern path
+except Exception:
+    try:
+        from huggingface_hub.utils._errors import HfHubHTTPError  # older path
+    except Exception:
+
+        class HfHubHTTPError(Exception):
+            pass
+
 
 # Choose a default model. You can override with env MODEL_ID
 MODEL_ID = os.environ.get("MODEL_ID", "facebook/nllb-200-3.3B")
