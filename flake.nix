@@ -29,13 +29,8 @@
 
       py = pkgs.python312;
 
-      pythonEnv = py.withPackages (ps: let
-        torch =
-          if ps ? pytorch-bin
-          then ps.pytorch-bin
-          else (ps.pytorch.override {cudaSupport = true;});
-      in [
-        torch
+      pythonEnv = py.withPackages (ps: [
+        (ps.pytorch.override {cudaSupport = true;})
         ps.transformers
         ps.sentencepiece
         ps.accelerate
